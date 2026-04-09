@@ -1,0 +1,74 @@
+# Data quality rules - read by transform.py at runtime
+
+null_checks:
+  transactions:
+    - transaction_id
+    - account_id
+    - transaction_date
+    - amount
+    - transaction_type
+    - currency
+    - channel
+  accounts:
+    - account_id
+
+type_checks:
+  transactions:
+    amount: decimal
+    transaction_date: date
+
+domain_checks:
+  transaction_type:
+    allowed: [DEBIT, CREDIT, FEE, REVERSAL]
+    dq_flag: TYPE_MISMATCH
+  channel:
+    allowed: [POS, APP, ATM, EFT, USSD, INTERNAL]
+    dq_flag: TYPE_MISMATCH
+
+currency_normalisation:
+  target_value: ZAR
+  known_variants: ["R", "rands", "710", "zar"]
+  flag_variants: true
+
+date_format_checks:
+  - transaction_date
+  - open_date
+  - last_activity_date
+  - dob
+
+referential_integrity:
+  transactions:
+    - field: account_id
+      references: accounts.account_id
+      dq_flag: ORPHANED_ACCOUNT
+
+dedup_keys:
+  customers: customer_id
+  accounts: account_id
+  transactions: transaction_id
+
+# Maps each dq_flag to the dq_report issue_type and handling_action.
+# The scoring system cross-references handling_action values here against
+# the dq_report.json -- these two must stay consistent.
+issue_handling:
+  CURRENCY_VARIANT:
+    issue_type: currency_variants
+    handling_action: NORMALISED_CURRENCY
+  TYPE_MISMATCH:
+    issue_type: type_mismatch
+    handling_action: FLAGGED_IN_OUTPUT
+  NULL_REQUIRED:
+    issue_type: null_required_field
+    handling_action: FLAGGED_IN_OUTPUT
+  DATE_FORMAT:
+    issue_type: date_format_inconsistency
+    handling_action: NORMALISED_DATE
+  DUPLICATE_DEDUPED:
+    issue_type: duplicate_transactions
+    handling_action: DEDUPLICATED_KEEP_FIRST
+  ORPHANED_ACCOUNT:
+    issue_type: orphaned_transactions
+    handling_action: FLAGGED_IN_OUTPUT
+  NULL_ACCOUNT_ID:
+    issue_type: null_account_id
+    handling_action: EXCLUDED_NULL_PK

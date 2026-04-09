@@ -1,0 +1,22 @@
+# Input data -- mounted at runtime, never baked into the image
+data/
+
+# Git and docs -- not needed in the container
+.git/
+.gitignore
+docs/
+adr/
+README.md
+run_tests.sh
+Dockerfile.base
+
+# Python artefacts
+__pycache__/
+*.pyc
+*.pyo
+
+# OS and editor files
+.DS_Store
+.vscode/
+.idea/
+.claude/
