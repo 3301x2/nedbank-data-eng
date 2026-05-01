@@ -25,8 +25,9 @@ def get_spark():
         .master("local[2]")
         .appName("nedbank-de-pipeline")
         .config("spark.driver.memory", "1g")
-        .config("spark.sql.shuffle.partitions", "4")
+        .config("spark.sql.shuffle.partitions", "8")
         .config("spark.default.parallelism", "2")
+        .config("spark.local.dir", "/data/output/_spark_tmp")
         .config("spark.jars", jars)
         .config("spark.driver.extraJavaOptions",
                 "-Djava.io.tmpdir=/tmp -Dorg.xerial.snappy.tempdir=/tmp")

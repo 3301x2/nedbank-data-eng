@@ -98,7 +98,7 @@ def transform_accounts(spark, bronze_path, silver_path, dq_rules):
     print("[Silver] accounts written")
 
 
-def transform_transactions(spark, bronze_path, silver_path, dq_rules):
+def transform_transactions(spark, bronze_path, silver_path, dq_rules, input_path):
     """Clean transactions: dedup, type cast, flatten nested, add dq_flag."""
     df = spark.read.format("delta").load(f"{bronze_path}/transactions")
 
@@ -162,7 +162,31 @@ def transform_transactions(spark, bronze_path, silver_path, dq_rules):
     # Normalise all currency to ZAR
     df = df.withColumn("currency", F.lit(target_currency))
 
-    # Flag type mismatch on amount (if it can't cast to decimal)
+    # Detect amount delivered as a JSON string (e.g. "349.50" instead of 349.50).
+    # Spark's mixed-type inference unifies to STRING and the cast to DECIMAL succeeds,
+    # so we scan the raw JSONL for the quoted-amount pattern.
+    type_mismatch_ids = (
+        spark.read.text(input_path)
+        .filter(F.col("value").rlike(r'"amount"\s*:\s*"'))
+        .select(
+            F.regexp_extract("value", r'"transaction_id"\s*:\s*"([^"]+)"', 1).alias("transaction_id")
+        )
+        .filter(F.col("transaction_id") != "")
+    )
+    df = df.join(
+        F.broadcast(type_mismatch_ids.withColumn("_amount_was_string", F.lit(True))),
+        on="transaction_id",
+        how="left",
+    )
+    df = df.withColumn(
+        "dq_flag",
+        F.when(
+            F.col("_amount_was_string").isNotNull() & F.col("dq_flag").isNull(),
+            F.lit("TYPE_MISMATCH"),
+        ).otherwise(F.col("dq_flag"))
+    ).drop("_amount_was_string")
+
+    # Cast amount; flag any remaining cast failures as TYPE_MISMATCH
     df = df.withColumn("_amount_parsed", F.col("amount").cast(DecimalType(18, 2)))
     df = df.withColumn(
         "dq_flag",
@@ -175,18 +199,19 @@ def transform_transactions(spark, bronze_path, silver_path, dq_rules):
     )
     df = df.withColumn("amount", F.col("_amount_parsed")).drop("_amount_parsed")
 
-    # Flag date format issues
+    # Flag any non-ISO date (DD/MM/YYYY, unix epoch, or unparseable). Normalised dates still flagged.
     df = df.withColumn("_date_parsed", parse_date_flexible("transaction_date"))
+    df = df.withColumn("_iso_check", F.to_date("transaction_date", "yyyy-MM-dd"))
     df = df.withColumn(
         "dq_flag",
         F.when(
-            F.col("_date_parsed").isNull()
-            & F.col("transaction_date").isNotNull()
+            F.col("transaction_date").isNotNull()
+            & F.col("_iso_check").isNull()
             & F.col("dq_flag").isNull(),
             F.lit("DATE_FORMAT"),
         ).otherwise(F.col("dq_flag"))
     )
-    df = df.withColumn("transaction_date", F.col("_date_parsed").cast(DateType())).drop("_date_parsed")
+    df = df.withColumn("transaction_date", F.col("_date_parsed").cast(DateType())).drop("_date_parsed", "_iso_check")
 
     # -- Type casting --
     df = df.withColumn(
@@ -367,10 +392,11 @@ def run_transformation():
 
     bronze_path = config["output"]["bronze_path"]
     silver_path = config["output"]["silver_path"]
+    txn_input = config["input"]["transactions_path"]
 
     # Accounts before transactions (transactions needs accounts for ref integrity)
     transform_customers(spark, bronze_path, silver_path, dq_rules)
     transform_accounts(spark, bronze_path, silver_path, dq_rules)
-    transform_transactions(spark, bronze_path, silver_path, dq_rules)
+    transform_transactions(spark, bronze_path, silver_path, dq_rules, txn_input)
 
     print("[Silver] transformation complete")
